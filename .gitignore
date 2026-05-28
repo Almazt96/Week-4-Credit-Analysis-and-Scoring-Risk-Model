@@ -1,0 +1,5 @@
+data/
+mlruns/
+.pytest_cache/
+__pycache__/
+*.pkl
