@@ -1,0 +1,22 @@
+version: '3.8'
+
+services:
+  risk_api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    environment:
+      - MLFLOW_TRACKING_URI=http://mlflow_server:5000
+      - MODEL_NAME=best_credit_risk_model
+      - MODEL_STAGE=Production
+    volumes:
+      - ./src:/app/src
+    restart: always
+
+# Assumes an existing or external network if connecting to your active MLflow container instance
+# networks:
+#   default:
+#     external:
+#       name: mlflow-network
