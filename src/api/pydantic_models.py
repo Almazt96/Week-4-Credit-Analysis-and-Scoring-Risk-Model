@@ -10,8 +10,8 @@ class CustomerData(BaseModel):
     employment_length: float = Field(..., example=4.5, ge=0)
     loan_amount: float = Field(..., example=15000.0, ge=0)
 
-    class Config:
-        schema_extra = {
+    model_config = {
+        "json_schema_extra": {
             "example": {
                 "age": 34,
                 "income": 55000.0,
@@ -20,6 +20,7 @@ class CustomerData(BaseModel):
                 "loan_amount": 15000.0
             }
         }
+    }
 
 class PredictionResponse(BaseModel):
     risk_probability: float = Field(..., example=0.23)
