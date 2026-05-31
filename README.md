@@ -14,3 +14,14 @@ Credit Scoring Business Understanding
 
     3.	Model Trade-offs: * Logistic Regression + WoE: Highly interpretable, satisfies regulators easily, stable, but might miss non-linear feature interactions.
     o	Gradient Boosting (XGBoost/LightGBM): High predictive accuracy, handles complex patterns well, but behaves as a black box requiring complex explainability tools (like SHAP) to satisfy Basel II.
+
+Metrices in simple terms:
+•	Accuracy: how often the model is correct overall
+•	Precision: when the model says “yes,” how often it is right
+•	Recall: out of all the real “yes” cases, how many it finds
+•	F1 score: a balance between precision and recall
+Quick example: Imagine spam detection.
+•	Accuracy: how many emails were classified correctly total
+•	Precision: of the emails marked as spam, how many were actually spam
+•	Recall: of all actual spam emails, how many the model caught
+•	F1: useful when you want both precision and recall to be good
