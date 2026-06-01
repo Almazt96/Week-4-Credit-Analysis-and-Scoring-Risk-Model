@@ -1,17 +1,10 @@
-# version: '3.8'
+version: '3.8'
 
 services:
-  mlflow-server: # Or whatever your service name is
-    image: ghcr.io/mlflow/mlflow:latest 
+  risk-api:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      - ENV=production
     restart: always
-    volumes:
-      - mlflow_data:/data
-    networks:
-      - mlflow-network
-
-networks:
-  mlflow-network:
-    driver: bridge #  CORRECT: Networks should only have network configs
-
-volumes:
-  mlflow_data:

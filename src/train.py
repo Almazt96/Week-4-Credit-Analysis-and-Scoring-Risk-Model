@@ -1,109 +1,87 @@
 # Model training
 import os
 import pandas as pd
-import numpy as np
+import pickle
+from sklearn.model_selection import train_test_split, GridSearchCV
+from sklearn.linear_model import LogisticRegression
+import lightgbm as lgb
+from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, roc_auc_score
 import mlflow
 import mlflow.sklearn
-from sklearn.model_selection import train_test_split, GridSearchCV
-from sklearn.ensemble import RandomForestClassifier
-from sklearn.linear_model import LogisticRegression
-from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, roc_auc_score
+import mlflow.lightgbm
 
-def load_data():
-    # Placeholder: Replace with your actual data ingestion logic
-    # Example: df = pd.read_csv("data/processed_data.csv")
-    X = pd.DataFrame(np.random.randn(100, 5), columns=[f'feat_{i}' for i in range(5)])
-    y = np.random.randint(0, 2, size=100)
-    return X, y
+from data_processing import build_feature_pipeline, engineer_proxy_target
 
-def evaluate_model(y_true, y_pred, y_prob):
-    metrics = {
-        "accuracy": accuracy_score(y_true, y_pred),
-        "precision": precision_score(y_true, y_pred, zero_division=0),
-        "recall": recall_score(y_true, y_pred, zero_division=0),
-        "f1_score": f1_score(y_true, y_pred, zero_division=0),
-        "roc_auc": roc_auc_score(y_true, y_prob)
-    }
-    return metrics
-
-def train_and_track():
-    # Set the MLflow experiment name
-    mlflow.set_experiment("Model_Training_and_Tracking")
+def run_training_lifecycle(data_path="./data/raw/data.csv"):
+    df = pd.read_csv(data_path)
     
-    # 1. Data Preparation
-    X, y = load_data()
+    # Generate Target Labels
+    targets = engineer_proxy_target(df)
+    
+    # Build and fit pipeline
+    pipeline = build_feature_pipeline()
+    
+    # Align X and y mapping indices by CustomerId
+    y_mapped = targets['is_high_risk']
+    
+    # Fit-Transform the pipeline data
+    X_transformed = pipeline.fit_transform(df, y_mapped)
+    y_final = y_mapped.loc[X_transformed.index]
+    
+    # Stratified Split
     X_train, X_test, y_train, y_test = train_test_split(
-        X, y, test_size=0.2, random_state=42, stratify=y
+        X_transformed, y_final, test_size=0.2, stratify=y_final, random_state=42
     )
     
-    # 2. Define Model Search Spaces
-    model_definitions = {
-        "Logistic_Regression": {
-            "model": LogisticRegression(max_iter=1000),
-            "params": {"C": [0.1, 1.0, 10.0]}
-        },
-        "Random_Forest": {
-            "model": RandomForestClassifier(random_state=42),
-            "params": {"n_estimators": [50, 100], "max_depth": [None, 5, 10]}
-        }
-    }
+    mlflow.set_experiment("Bati_Bank_Credit_Risk")
     
-    best_overall_score = -1
-    best_model_uri = None
-    best_model_name = None
-
-    # 3. Model Selection, Tuning, and Experiment Tracking
-    for model_name, config in model_definitions.items():
-        # Start an MLflow parent run for this specific algorithm
-        with mlflow.start_run(run_name=f"Tuning_{model_name}"):
+    # Model 1: Logistic Regression (Baseline)
+    with mlflow.start_run(run_name="Logistic_Regression_Baseline"):
+        lr = LogisticRegression(max_iter=1000, random_state=42)
+        param_grid_lr = {'C': [0.01, 0.1, 1.0, 10.0]}
+        grid_lr = GridSearchCV(lr, param_grid_lr, cv=3, scoring='roc_auc')
+        grid_lr.fit(X_train, y_train)
+        
+        best_lr = grid_lr.best_estimator_
+        preds = best_lr.predict(X_test)
+        probs = best_lr.predict_proba(X_test)[:, 1]
+        
+        # Log Metrics
+        mlflow.log_params(grid_lr.best_params_)
+        mlflow.log_metric("ROC_AUC", roc_auc_score(y_test, probs))
+        mlflow.log_metric("F1_Score", f1_score(y_test, preds))
+        mlflow.sklearn.log_model(best_lr, "model", registered_model_name="LR_Baseline")
+        
+    # Model 2: LightGBM (Challenger)
+    with mlflow.start_run(run_name="LightGBM_Challenger"):
+        lgb_model = lgb.LGBMClassifier(random_state=42, verbose=-1)
+        param_grid_lgb = {
+            'learning_rate': [0.01, 0.05, 0.1],
+            'max_depth': [3, 5, 7],
+            'n_estimators': [50, 100]
+        }
+        grid_lgb = GridSearchCV(lgb_model, param_grid_lgb, cv=3, scoring='roc_auc')
+        grid_lgb.fit(X_train, y_train)
+        
+        best_lgb = grid_lgb.best_estimator_
+        lgb_preds = best_lgb.predict(X_test)
+        lgb_probs = best_lgb.predict_proba(X_test)[:, 1]
+        
+        lgb_auc = roc_auc_score(y_test, lgb_probs)
+        mlflow.log_params(grid_lgb.best_params_)
+        mlflow.log_metric("ROC_AUC", lgb_auc)
+        mlflow.log_metric("F1_Score", f1_score(y_test, lgb_preds))
+        mlflow.lightgbm.log_model(best_lgb, "model")
+        
+        # Save champion model mapping configurations locally for container usage
+        os.makedirs("models", exist_ok=True)
+        with open("models/pipeline.pkl", "wb") as f:
+            pickle.dump(pipeline, f)
+        with open("models/champion_model.pkl", "wb") as f:
+            pickle.dump(best_lgb, f)
             
-            print(f"Running Hyperparameter Tuning for {model_name}...")
-            grid_search = GridSearchCV(
-                estimator=config["model"],
-                param_grid=config["params"],
-                cv=3,
-                scoring='f1',
-                n_jobs=-1
-            )
-            grid_search.fit(X_train, y_train)
-            
-            # Extract best model and params
-            best_model = grid_search.best_estimator_
-            best_params = grid_search.best_params_
-            
-            # Evaluate on unseen test data
-            y_pred = best_model.predict(X_test)
-            y_prob = best_model.predict_proba(X_test)[:, 1]
-            metrics = evaluate_model(y_test, y_pred, y_prob)
-            
-            # Log Parameters and Metrics to MLflow
-            mlflow.log_params(best_params)
-            mlflow.log_metrics(metrics)
-            mlflow.set_tag("algorithm", model_name)
-            
-            # Log the Model Artifact
-            # input_example helps MLflow understand the expected data schema
-            input_example = X_train.head(1)
-            model_info = mlflow.sklearn.log_model(
-                sk_model=best_model,
-                artifact_path="model",
-                input_example=input_example
-            )
-            
-            print(f"{model_name} Metrics: {metrics}")
-            
-            # Track the absolute best model based on F1 Score
-            if metrics["f1_score"] > best_overall_score:
-                best_overall_score = metrics["f1_score"]
-                best_model_uri = model_info.model_uri
-                best_model_name = model_name
-
-    # 4. Model Registry
-    if best_model_uri:
-        print(f"\nRegistering the best model ({best_model_name}) in the MLflow Registry...")
-        registered_model_name = "Best_Classification_Model"
-        mlflow.register_model(model_uri=best_model_uri, name=registered_model_name)
-        print(f"Model successfully registered as '{registered_model_name}'!")
+        # Programmatic production promotion simulation mapping
+        print(f"Champion Model Trained successfully with ROC-AUC: {lgb_auc}")
 
 if __name__ == "__main__":
-    train_and_track()
+    run_training_lifecycle()
