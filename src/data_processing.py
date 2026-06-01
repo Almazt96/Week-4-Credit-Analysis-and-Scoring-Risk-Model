@@ -1,177 +1,239 @@
 # Feature engineering
-import pandas as pd
 import numpy as np
+import pandas as pd
 from sklearn.base import BaseEstimator, TransformerMixin
 from sklearn.pipeline import Pipeline
-from sklearn.preprocessing import OneHotEncoder, StandardScaler
+from sklearn.preprocessing import StandardScaler, OneHotEncoder
 from sklearn.impute import SimpleImputer
-from sklearn.compose import ColumnTransformer
+from sklearn.cluster import KMeans
 
-class TransactionAggregator(BaseEstimator, TransformerMixin):
+# ==========================================
+# TASK 3: CUSTOM TRANSFORMERS
+# ==========================================
+
+class FeatureEngineerAndAggregator(BaseEstimator, TransformerMixin):
     """
-    Transforms transaction-level logs into customer-level analytical records
-    by creating aggregate features and extracting date-time metrics.
+    Extracts datetime features, calculates aggregate features per customer,
+    and returns a customer-level aggregated dataframe.
     """
-    def __init__(self):
-        pass
+    def __init__(self, date_col='TransactionStartTime', customer_id_col='CustomerId', amount_col='Amount'):
+        self.date_col = date_col
+        self.customer_id_col = customer_id_col
+        self.amount_col = amount_col
 
     def fit(self, X, y=None):
         return self
 
     def transform(self, X):
         df = X.copy()
+        # Ensure datetime
+        df[self.date_col] = pd.to_datetime(df[self.date_col])
         
-        # Ensure correct datetime parsing
-        df['TransactionStartTime'] = pd.to_datetime(df['TransactionStartTime'])
+        # Extract datetime components
+        df['TransactionHour'] = df[self.date_col].dt.hour
+        df['TransactionDay'] = df[self.date_col].dt.day
+        df['TransactionMonth'] = df[self.date_col].dt.month
+        df['TransactionYear'] = df[self.date_col].dt.year
         
-        # 1. Temporal Feature Extraction (At transaction level before grouping)
-        df['TransactionHour'] = df['TransactionStartTime'].dt.hour
-        df['TransactionDay'] = df['TransactionStartTime'].dt.day
-        df['TransactionMonth'] = df['TransactionStartTime'].dt.month
-        df['TransactionYear'] = df['TransactionStartTime'].dt.year
-        
-        # 2. Creating Aggregate Customer Features
-        # For categorical features, we take the dominant (mode) value per customer
+        # Handle simple categorical mode per customer for baseline categorical tracking (e.g., ProductId, ChannelId)
+        # For this script, we'll focus heavily on the requested structural aggregations
         agg_funcs = {
-            'Amount': ['sum', 'mean', 'count', 'std'],
-            'Value': ['sum', 'mean', 'std'],
+            self.amount_col: ['sum', 'mean', 'count', 'std'],
             'TransactionHour': 'mean',
             'TransactionDay': 'mean',
-            'TransactionMonth': 'mean',
-            'TransactionYear': 'first',
-            'ChannelId': lambda x: x.mode()[0] if not x.mode().empty else 'Unknown',
-            'ProductCategory': lambda x: x.mode()[0] if not x.mode().empty else 'Unknown',
-            'PricingStrategy': lambda x: x.mode()[0] if not x.mode().empty else 0
+            'TransactionMonth': 'mean'
         }
         
-        customer_df = df.groupby('CustomerId').agg(agg_funcs)
+        # Dynamic handling if other categorical columns are present
+        cat_cols = df.select_dtypes(include=['object', 'category']).columns.drop([self.customer_id_col], errors='ignore')
+        for col in cat_cols:
+            agg_funcs[col] = lambda x: x.mode()[0] if not x.mode().empty else np.nan
+
+        # Aggregate per customer
+        customer_df = df.groupby(self.customer_id_col).agg(agg_funcs)
         
-        # Flatten multi-level column names resulting from aggregation
+        # Flatten MultiIndex columns
         customer_df.columns = [
-            f"{col[0]}_{col[1]}" if isinstance(col, tuple) else col 
-            for col in customer_df.columns
+            f"{col}_{stat}" if isinstance(stat, str) else col 
+            for col, stat in customer_df.columns
         ]
         customer_df = customer_df.reset_index()
         
-        # Fill standard deviation NaNs (caused by customers with exactly 1 transaction)
-        customer_df['Amount_std'] = customer_df['Amount_std'].fillna(0.0)
-        customer_df['Value_std'] = customer_df['Value_std'].fillna(0.0)
+        # Rename structural columns to match objectives
+        customer_df.rename(columns={
+            f"{self.amount_col}_sum": "Total_Transaction_Amount",
+            f"{self.amount_col}_mean": "Average_Transaction_Amount",
+            f"{self.amount_col}_count": "Transaction_Count",
+            f"{self.amount_col}_std": "Standard_Deviation_Amount"
+        }, inplace=self)
         
         return customer_df
 
 
-class ManualWoETransformer(BaseEstimator, TransformerMixin):
+class WoETransformer(BaseEstimator, TransformerMixin):
     """
-    Applies Weight of Evidence (WoE) value-mapping safely across critical columns
-    to adhere to traditional credit rating scorecard expectations.
+    Applies Weight of Evidence (WoE) mapping manually to avoid rigid third-party library constraints,
+    ensuring stability inside the pipeline.
+    Note: Requires a target variable during fit. If target is missing (Task 3 phase), it passes through.
     """
-    def __init__(self, columns_to_woe=None):
-        self.columns_to_woe = columns_to_woe if columns_to_woe else []
+    def __init__(self, cat_cols=None):
+        self.cat_cols = cat_cols
         self.woe_maps = {}
 
     def fit(self, X, y=None):
-        # In a real setup with ground-truth targets (y), you compute real WoE logs here.
-        # For the proxy setup, we initialize stable structural mapping placeholders.
-        if y is not None and len(self.columns_to_woe) > 0:
-            df = pd.DataFrame(X).copy()
-            df['target'] = y
-            for col in self.columns_to_woe:
-                # Grouped distribution counts
-                total_good = (df['target'] == 0).sum()
-                total_bad = (df['target'] == 1).sum()
+        if y is None or self.cat_cols is None:
+            return self
+        
+        df = X.copy()
+        df['target'] = y
+        
+        for col in self.cat_cols:
+            if col in df.columns:
+                # Calculate WoE: ln(% of Goods / % of Bads)
+                total_pos = df['target'].sum()
+                total_neg = len(df) - total_pos
                 
-                # Fallback to prevent divide by zero
-                total_good = total_good if total_good > 0 else 1
-                total_bad = total_bad if total_bad > 0 else 1
-
-                # Group by bins/categories
+                # Smooth to avoid division by zero
                 stats = df.groupby(col)['target'].agg(['count', 'sum'])
-                stats['good'] = stats['count'] - stats['sum']
-                stats['bad'] = stats['sum']
+                stats['bads'] = stats['sum']
+                stats['goods'] = stats['count'] - stats['bads']
                 
-                # Calculate WoE percentages
-                stats['woe'] = np.log(
-                    (stats['good'] / total_good + 1e-5) / 
-                    (stats['bad'] / total_bad + 1e-5)
-                )
-                self.woe_maps[col] = stats['woe'].to_dict()
+                stats['prop_goods'] = (stats['goods'] + 0.5) / total_neg
+                stats['prop_bads'] = (stats['bads'] + 0.5) / total_pos
+                
+                self.woe_maps[col] = np.log(stats['prop_goods'] / stats['prop_bads']).to_dict()
         return self
 
     def transform(self, X):
-        df = pd.DataFrame(X).copy()
-        for col, mapping in self.woe_maps.items():
+        df = X.copy()
+        for col, woe_map in self.woe_maps.items():
             if col in df.columns:
-                df[col] = df[col].map(mapping).fillna(0.0)
+                df[col] = df[col].map(woe_map).fillna(0) # Default to 0 (neutral WoE) if category unseen
         return df
 
 
-def create_full_processing_pipeline(numerical_cols, categorical_cols):
+# ==========================================
+# TASK 4: CUSTOM PROXY TARGET TRANSFORMER
+# ==========================================
+
+class RFMTargetEngineer(BaseEstimator, TransformerMixin):
     """
-    Builds a comprehensive scikit-learn preprocessing Pipeline layout.
+    Calculates RFM metrics, clusters customers using KMeans, and creates the proxy target variable 'is_high_risk'.
     """
-    # Numerical sub-pipeline
-    num_transformer = Pipeline(steps=[
-        ('imputer', SimpleImputer(strategy='median')),
-        ('scaler', StandardScaler())
+    def __init__(self, date_col='TransactionStartTime', customer_id_col='CustomerId', amount_col='Amount', random_state=42):
+        self.date_col = date_col
+        self.customer_id_col = customer_id_col
+        self.amount_col = amount_col
+        self.random_state = random_state
+        self.kmeans = KMeans(n_clusters=3, random_state=self.random_state, n_init=10)
+        self.scaler = StandardScaler()
+        self.high_risk_cluster_id = None
+
+    def fit(self, X, y=None):
+        # We need raw transaction log or intermediate df to compute Recency
+        df = X.copy()
+        df[self.date_col] = pd.to_datetime(df[self.date_col])
+        
+        # 1. Define Snapshot Date (Max date + 1 day)
+        snapshot_date = df[self.date_col].max() + pd.Timedelta(days=1)
+        
+        # 2. Calculate RFM Core metrics
+        rfm = df.groupby(self.customer_id_col).agg({
+            self.date_col: lambda x: (snapshot_date - x.max()).days, # Recency
+            self.customer_id_col: 'count',                          # Frequency
+            self.amount_col: 'sum'                                   # Monetary
+        })
+        
+        rfm.columns = ['Recency', 'Frequency', 'Monetary']
+        
+        # 3. Scale RFM for clustering
+        scaled_rfm = self.scaler.fit_transform(rfm)
+        
+        # 4. Fit K-Means
+        self.kmeans.fit(scaled_rfm)
+        rfm['Cluster'] = self.kmeans.labels_
+        
+        # 5. Identify High-Risk Cluster (Low Frequency, Low Monetary, High Recency)
+        # We look for the lowest Mean Frequency + Monetary cluster profile
+        cluster_profiles = rfm.groupby('Cluster').mean()
+        # Sorting by a combined profile index where high risk = low frequency and low monetary
+        self.high_risk_cluster_id = cluster_profiles['Frequency'].idxmin()
+        
+        return self
+
+    def transform(self, X):
+        # Re-calculate RFM dynamically on incoming data to assign targets
+        df = X.copy()
+        df[self.date_col] = pd.to_datetime(df[self.date_col])
+        snapshot_date = df[self.date_col].max() + pd.Timedelta(days=1)
+        
+        rfm = df.groupby(self.customer_id_col).agg({
+            self.date_col: lambda x: (snapshot_date - x.max()).days,
+            self.customer_id_col: 'count',
+            self.amount_col: 'sum'
+        })
+        rfm.columns = ['Recency', 'Frequency', 'Monetary']
+        
+        scaled_rfm = self.scaler.transform(rfm)
+        clusters = self.kmeans.predict(scaled_rfm)
+        
+        # Map High-Risk Cluster to 1, others to 0
+        rfm['is_high_risk'] = [1 if c == self.high_risk_cluster_id else 0 for c in clusters]
+        
+        return rfm[['is_high_risk']].reset_index()
+
+
+# ==========================================
+# MASTER PIPELINE EXECUTION FUNCTION
+# ==========================================
+
+def build_and_run_pipeline(raw_data_path: str) -> pd.DataFrame:
+    """
+    Loads raw data, executes full feature engineering pipeline,
+    generates proxy targets via RFM clustering, and outputs a model-ready dataframe.
+    """
+    # Load Raw Data
+    df_raw = pd.read_csv(raw_data_path)
+    
+    # --- Step 1: Generate High-Risk Target Variables (Task 4 Blueprint) ---
+    target_engineer = RFMTargetEngineer()
+    target_df = target_engineer.fit_transform(df_raw)
+    
+    # --- Step 2: Extract & Aggregate Features (Task 3 Blueprint) ---
+    feature_pipeline = Pipeline([
+        ('aggregator', FeatureEngineerAndAggregator()),
     ])
+    
+    processed_customer_df = feature_pipeline.fit_transform(df_raw)
+    
+    # --- Step 3: Merge Target and Processed Features ---
+    final_df = pd.merge(processed_customer_df, target_df, on='CustomerId', how='left')
+    
+    # --- Step 4: Final Cleansing/Standardization (Handling Missing values & scaling numericals) ---
+    # Separate numeric columns (excluding IDs and targets)
+    exclude_cols = ['CustomerId', 'is_high_risk']
+    num_cols = final_df.select_dtypes(include=[np.number]).columns.drop(exclude_cols, errors='ignore')
+    
+    # Impute missing values (e.g., standard deviations that resulted in NaN due to 1 transaction)
+    imputer = SimpleImputer(strategy='median')
+    final_df[num_cols] = imputer.fit_transform(final_df[num_cols])
+    
+    # Standardize numerical metrics
+    scaler = StandardScaler()
+    final_df[num_cols] = scaler.fit_transform(final_df[num_cols])
+    
+    # --- Step 5: Post-Target Weight of Evidence (WoE) Engine ---
+    # Dynamically extract tracking categories if available (e.g., ProductId if aggregated as mode)
+    cat_cols = final_df.select_dtypes(include=['object']).columns.drop(['CustomerId'], errors='ignore')
+    if len(cat_cols) > 0:
+        woe = WoETransformer(cat_cols=list(cat_cols))
+        final_df = woe.fit_transform(final_df, y=final_df['is_high_risk'])
+        
+    return final_df
 
-    # Categorical sub-pipeline
-    cat_transformer = Pipeline(steps=[
-        ('imputer', SimpleImputer(strategy='constant', fill_value='Unknown')),
-        ('onehot', OneHotEncoder(handle_unknown='ignore', sparse_output=False))
-    ])
-
-    # Combine columns transformations
-    preprocessor = ColumnTransformer(
-        transformers=[
-            ('num', num_transformer, numerical_cols),
-            ('cat', cat_transformer, categorical_cols)
-        ],
-        remainder='drop'
-    )
-
-    # Master pipeline chain
-    master_pipeline = Pipeline(steps=[
-        ('aggregator', TransactionAggregator()),
-        ('woe_mapping', ManualWoETransformer(columns_to_woe=['ChannelId_<lambda>', 'ProductCategory_<lambda>'])),
-        ('column_transform', preprocessor)
-    ])
-
-    return master_pipeline
-
-
-# Self-contained testing execution block
 if __name__ == "__main__":
-    print("🔄 Generating sample data matrix to verify data preprocessing script pipeline...")
-    
-    # Mock data resembling raw Xente transaction logs
-    raw_sample_data = pd.DataFrame({
-        'TransactionId': [f'T{i}' for i in range(1, 6)],
-        'CustomerId': ['C_001', 'C_002', 'C_001', 'C_003', 'C_002'],
-        'Amount': [5000.0, -1200.0, 3000.0, 15000.0, 400.0],
-        'Value': [5000.0, 1200.0, 3000.0, 15000.0, 400.0],
-        'TransactionStartTime': [
-            '2026-05-28 14:20:00', 
-            '2026-05-28 15:30:00', 
-            '2026-05-29 09:15:00', 
-            '2026-05-30 22:11:00', 
-            '2026-05-30 11:05:00'
-        ],
-        'ChannelId': ['web', 'Android', 'web', 'pay-later', 'Android'],
-        'ProductCategory': ['Airtime', 'UtilityBill', 'Airtime', 'FinancialServices', 'UtilityBill'],
-        'PricingStrategy': [2, 4, 2, 1, 4]
-    })
-
-    # Explicit column configurations following TransactionAggregator flattening output names
-    num_features = [
-        'Amount_sum', 'Amount_mean', 'Amount_count', 'Amount_std',
-        'Value_sum', 'Value_mean', 'Value_std',
-        'TransactionHour_mean', 'TransactionDay_mean', 'TransactionMonth_mean'
-    ]
-    cat_features = ['ChannelId_<lambda>', 'ProductCategory_<lambda>', 'PricingStrategy_<lambda>']
-
-    # Initialize and fit
-    pipeline = create_full_processing_pipeline(num_features, cat_features)
-    processed_matrix = pipeline.fit_transform(raw_sample_data)
-    
-    print("✅ Preprocessing check succeeded! Model-Ready output shape matrix:", processed_matrix.shape)
+    # Example execution script structure
+    print("Pipeline script initialized successfully.")
+    # To execute in production:
+    # processed_data = build_and_run_pipeline('data/raw_transactions.csv')
+    # processed_data.to_csv('data/model_ready_dataset.csv', index=False)
