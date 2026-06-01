@@ -13,8 +13,6 @@ sys.path.append(project_root)
 # Your original imports will now work perfectly:
 from src.api.pydantic_models import CustomerData, PredictionResponse
 
-# Your original imports follow:
-from src.api.pydantic_models import CustomerData, PredictionResponse
 app = FastAPI(
     title="FinTech Credit Risk Scoring API",
     description="Containerized API for predicting customer risk probabilities using MLflow models.",
@@ -94,3 +92,7 @@ def predict(payload: CustomerData):
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("src.api.main:app", host="127.0.0.1", port=8000, reload=True)
+    
+    
+    import pydantic_models
+    from data_processing import create_full_processing_pipeline, ManualWoETransformer, TransactionAggregator
