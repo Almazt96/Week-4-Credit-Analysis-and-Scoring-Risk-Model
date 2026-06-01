@@ -4,7 +4,7 @@ import numpy as np
 from sklearn.base import BaseEstimator, TransformerMixin
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import RobustScaler
-from category_encoders.woe import WoEEncoder
+from category_encoders.woe import WOEEncoder
 
 class TemporalFeatureExtractor(BaseEstimator, TransformerMixin):
     def __init__(self, date_col='TransactionStartTime'):
@@ -52,7 +52,7 @@ class CustomerAggregatorAndEncoder(BaseEstimator, TransformerMixin):
         
         # Fit WoE Encoder
         cat_cols = ['ProductId', 'ProductCategory']
-        self.woe_encoder = WoEEncoder(cols=cat_cols)
+        self.woe_encoder = WOEEncoder(cols=cat_cols)
         X_encoded = self.woe_encoder.fit_transform(X_agg[cat_cols], y_grouped)
         
         # Combine numerical and WoE values
