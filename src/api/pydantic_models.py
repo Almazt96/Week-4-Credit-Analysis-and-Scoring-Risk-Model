@@ -19,19 +19,21 @@ class CustomerData(BaseModel):
     employment_length: float = Field(..., example=4.5, ge=0)
     loan_amount: float = Field(..., example=15000.0, ge=0)
 
-    model_config = {
-        "json_schema_extra": {
-            "example": {
-                "age": 34,
-                "income": 55000.0,
-                "credit_score": 680,
-                "employment_length": 4.5,
-                "loan_amount": 15000.0
-            }
-        }
-    }
+from pydantic import BaseModel
+from typing import List, Any
+
+class TransactionRow(BaseModel):
+    CustomerId: str
+    Amount: float
+    TransactionStartTime: str
+    ProductId: str
+    ProductCategory: str
+
+class PredictionRequest(BaseModel):
+    transactions: List[TransactionRow]
 
 class PredictionResponse(BaseModel):
+
     risk_probability: float = Field(..., example=0.23)
     risk_label: int = Field(..., example=0, description="0 for Low Risk, 1 for High Risk")
     prediction: str = Field(..., example="Low Risk", description="Human-readable prediction label")
@@ -102,3 +104,6 @@ async def health_check():
     return healthCheckResponse(status="OK") 
 
 predict endpoint implementation will be defined in the main application file, where the logic for handling requests, making predictions using the machine learning model, and formatting responses will be implemented.
+    customer_id: str
+    credit_risk_probability: float
+    is_high_risk: int
