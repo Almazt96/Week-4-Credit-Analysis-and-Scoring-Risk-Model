@@ -3,6 +3,7 @@ import os
 import logging
 from contextlib import asynccontextmanager
 import mlflow
+import joblib
 from fastapi import FastAPI, HTTPException, status
 from pydantic import BaseModel, Field
 
@@ -92,3 +93,32 @@ async def predict(payload: CreditApplication):
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An error occurred during model inference."
         )
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("api.main")
+
+app = FastAPI()
+model = None
+
+@app.on_event("startup")
+def load_model():
+    global model
+    try:
+        logger.info("!!! TRACER: STARTING LOCAL MODEL LOAD PROCESS !!!")
+        
+        # Pointing explicitly to your champion_model.pkl file
+        # model_path = os.path.join(os.path.dirname(__file__), "models", "champion_model.pkl")
+        # # Remove the "models" subfolder from the path joining logic
+        model_path = os.path.join(os.path.dirname(__file__), "champion_model.pkl")
+        logger.info(f"Looking for model at local path: {model_path}")
+        
+        if not os.path.exists(model_path):
+            logger.error(f"Model file not found at {model_path}!")
+            raise FileNotFoundError(f"Missing champion_model.pkl inside container.")
+
+        model = joblib.load(model_path)
+        logger.info("🎉 SUCCESS: Champion model loaded beautifully from local file system!")
+        
+    except Exception as e:
+        logger.error(f"Critical error loading local model: {e}")
+        raise RuntimeError("Model initialization failed. API cannot start without a model.")
