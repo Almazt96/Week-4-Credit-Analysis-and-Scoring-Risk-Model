@@ -14,10 +14,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy application source code and tests
 COPY src/ ./src/
 COPY tests/ ./tests/
-COPY main.py .
 
 # Expose the application port
 EXPOSE 8000
 
-# Single, clean runtime entrypoint
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
+# Point Uvicorn to main inside the src folder (src.main:app)
+CMD ["uvicorn", "src.main:app", "--host", "0.0.0.0", "--port", "8000"]
