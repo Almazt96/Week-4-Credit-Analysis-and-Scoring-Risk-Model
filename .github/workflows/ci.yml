@@ -30,10 +30,15 @@ jobs:
         pip install -r requirements.txt
         pip install pytest  # Ensure test runner is available
 
-    - name: Run Unit Tests
-      run: |
-        pytest -v
+    # - name: Run Unit Tests
+    #   run: |
+    #     pytest -v
 
+    - name: Run tests
+      env:
+        PYTHONPATH: src
+      run: pytest -v
+    
     # This step only runs if the 'Run Unit Tests' step finishes with an exit code of 0
     - name: Build Docker Image
       if: success()
