@@ -9,9 +9,13 @@ import lightgbm as lgb
 from sklearn.model_selection import train_test_split, GridSearchCV
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, roc_auc_score
-
-
 from data_processing import build_feature_pipeline, engineer_proxy_target
+
+# Tell MLflow to store EVERYTHING in a local SQLite database file
+mlflow.set_tracking_uri("sqlite:///D:/personal/kifiya 10 Academy/10 Academy/Week 4 credit-risk-model/mlflow.db")
+
+# Optional: Set your experiment name
+mlflow.set_experiment("Credit_Risk_Experiment")
 
 def run_training_lifecycle(data_path="./data/raw/data.csv"):
     df = pd.read_csv(data_path)
@@ -106,3 +110,26 @@ def run_training_lifecycle(data_path="./data/raw/data.csv"):
 
 if __name__ == "__main__":
     run_training_lifecycle()
+
+with mlflow.start_run() as run:
+    # ... your model training code (e.g., model.fit()) ...
+    
+    # Log the model and automatically register it to the Model Registry
+    mlflow.sklearn.log_model(
+        sk_model=your_model_variable,
+        artifact_path="model",
+        registered_model_name="Credit_Risk_Model"  # <--- THIS IS CRITICAL
+    )
+from mlflow.tracking import MlflowClient
+import mlflow
+
+mlflow.set_tracking_uri("sqlite:///D:/personal/kifiya 10 Academy/10 Academy/Week 4 credit-risk-model/mlflow.db")
+
+client = MlflowClient()
+# Transition Version 1 of 'Credit_Risk_Model' to 'Production'
+client.transition_model_version_stage(
+    name="Credit_Risk_Model",
+    version=1,
+    stage="Production"
+)
+print("Model successfully promoted to Production stage!")
