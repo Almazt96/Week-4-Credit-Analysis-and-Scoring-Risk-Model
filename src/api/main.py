@@ -1,15 +1,13 @@
-# FastAPI application
 import os
+import joblib
 import logging
 from contextlib import asynccontextmanager
-import mlflow
-import joblib
 from fastapi import FastAPI, HTTPException, status
 from pydantic import BaseModel, Field
 
 # Setup logging
 logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("api.main")
 
 # Global variable for the model
 model = None
@@ -17,27 +15,34 @@ model = None
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """
-    Handles API startup and shutdown events. 
-    Simplifies and de-duplicates model-loading lifecycle code.
+    Handles API startup and shutdown events cleanly.
+    Loads the LightGBM champion model from the local container path.
     """
     global model
-    model_uri = os.getenv("MLFLOW_MODEL_URI", "models:/CreditRiskModel/Production")
-    logger.info(f"Attempting to load model from: {model_uri}")
-    
     try:
-        # Explicit error handling for model loading
-        model = mlflow.pyfunc.load_model(model_uri)
-        logger.info("Model loaded successfully into memory.")
+        logger.info("!!! TRACER: STARTING LOCAL MODEL LOAD PROCESS !!!")
+        
+        # Build path to champion_model.pkl sitting right next to main.py
+        model_path = os.path.join(os.path.dirname(__file__), "champion_model.pkl")
+        logger.info(f"Looking for model at local path: {model_path}")
+        
+        if not os.path.exists(model_path):
+            logger.error(f"Model file not found at {model_path}!")
+            raise FileNotFoundError("Missing champion_model.pkl inside container.")
+
+        # Load the local pkl file using joblib
+        model = joblib.load(model_path)
+        logger.info("🎉 SUCCESS: Champion model loaded beautifully from local file system!")
+        
     except Exception as e:
-        logger.critical(f"Failed to load model on startup: {str(e)}")
-        # Note: Depending on your CI/CD, you might want to raise the error 
-        # to prevent an unhealthy container from deploying.
-        model = None
+        logger.critical(f"Critical error loading local model: {e}")
+        # Crash the startup sequence explicitly if the model fails to load
+        raise RuntimeError(f"Model initialization failed. API cannot start without a model. Internal error: {e}")
         
     yield
-    # Clean up on shutdown if necessary
     logger.info("Shutting down API...")
 
+# Initialize the one and ONLY app instance
 app = FastAPI(
     title="Credit Risk Scoring API", 
     version="1.0.0",
@@ -45,7 +50,6 @@ app = FastAPI(
 )
 
 # --- Pydantic Request/Response Models ---
-# (Keep this clean or import from your corrected pydantic_models.py)
 class CreditApplication(BaseModel):
     income: float = Field(..., gt=0, description="Annual income must be greater than 0")
     loan_amount: float = Field(..., gt=0, description="Loan amount must be greater than 0")
@@ -67,7 +71,6 @@ async def health_check():
 
 @app.post("/predict", response_model=PredictionResponse, status_code=status.HTTP_200_OK)
 async def predict(payload: CreditApplication):
-    # Guard clause for model availability
     if model is None:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -75,13 +78,13 @@ async def predict(payload: CreditApplication):
         )
     
     try:
-        # Convert Pydantic model to the format your model expects (e.g., Dict or DataFrame)
+        # Convert Pydantic model directly to a list of dicts for model input format
         input_data = [payload.dict()]
         
-        # Make inference
+        # Make inference using your loaded joblib model
         predictions = model.predict(input_data)
         
-        # Assuming binary classification output; adapt based on your specific model return type
+        # Extract prediction probabilities (handling array structures safely)
         prob = float(predictions[0]) if hasattr(predictions, "__iter__") else float(predictions)
         pred = 1 if prob >= 0.5 else 0
         
@@ -91,34 +94,5 @@ async def predict(payload: CreditApplication):
         logger.error(f"Inference failure: {str(e)}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An error occurred during model inference."
+            detail=f"An error occurred during model inference: {str(e)}"
         )
-
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("api.main")
-
-app = FastAPI()
-model = None
-
-@app.on_event("startup")
-def load_model():
-    global model
-    try:
-        logger.info("!!! TRACER: STARTING LOCAL MODEL LOAD PROCESS !!!")
-        
-        # Pointing explicitly to your champion_model.pkl file
-        # model_path = os.path.join(os.path.dirname(__file__), "models", "champion_model.pkl")
-        # # Remove the "models" subfolder from the path joining logic
-        model_path = os.path.join(os.path.dirname(__file__), "champion_model.pkl")
-        logger.info(f"Looking for model at local path: {model_path}")
-        
-        if not os.path.exists(model_path):
-            logger.error(f"Model file not found at {model_path}!")
-            raise FileNotFoundError(f"Missing champion_model.pkl inside container.")
-
-        model = joblib.load(model_path)
-        logger.info("🎉 SUCCESS: Champion model loaded beautifully from local file system!")
-        
-    except Exception as e:
-        logger.error(f"Critical error loading local model: {e}")
-        raise RuntimeError("Model initialization failed. API cannot start without a model.")
