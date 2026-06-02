@@ -4,12 +4,76 @@ from contextlib import asynccontextmanager
 from typing import Dict, Any
 import mlflow
 import pandas as pd
+<<<<<<< HEAD
 from fastapi import FastAPI, HTTPException, status
 from pydantic import BaseModel, Field
+=======
+from fastapi import FastAPI, HTTPException
+
+from src.api.pydantic_models import CustomerData, PredictionResponse
+
+# Navigates 2 levels up from main.py to find the project root
+project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.append(project_root)
+
+# Your original imports will now work perfectly:
+from src.api.pydantic_models import CustomerData, PredictionResponse
+
+app = FastAPI(
+    title="FinTech Credit Risk Scoring API",
+    description="Containerized API for predicting customer risk probabilities using MLflow models.",
+    version="1.0.0"
+)
+
+# Load configuration from environment variables
+MLFLOW_TRACKING_URI = os.getenv("MLFLOW_TRACKING_URI", "http://localhost:5000")
+MODEL_NAME = os.getenv("MODEL_NAME", "best_credit_risk_model")
+MODEL_STAGE = os.getenv("MODEL_STAGE", "Production") # Or use 'latest' / specific version URI
+
+mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
+
+model = None
+
+from contextlib import asynccontextmanager
+from fastapi import FastAPI
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # 1. Put anything you want to run on STARTUP here
+    print("API is starting up... loading models...")
+    
+    yield  # The API runs and handles requests while paused here
+    @app.on_event("startup")
+    def load_model():
+        global model
+        try:
+            # Construct the model URI from the registry
+            model_uri = f"models://{MODEL_NAME}/{MODEL_STAGE}"
+            model = mlflow.pyfunc.load_model(model_uri)
+            print(f"Successfully loaded model: {MODEL_NAME} from stage: {MODEL_STAGE}")
+        except Exception as e:
+            print(f"Failed to load model from MLflow registry: {e}")
+            # Fallback or initialization handling depending on local setup
+            raise RuntimeError("Model initialization failed. API cannot start without a model.")
+        
+    # 2. Put anything you want to run on SHUTDOWN here (optional)
+    print("API is shutting down... cleaning up...")
+
+# Pass the lifespan handler to your FastAPI instance
+app = FastAPI(lifespan=lifespan)
+
+# ... rest of your endpoints (@app.get, @app.post, etc.)
+
+@app.get("/")
+def read_root():
+
+from src.api.pydantic_models import PredictionRequest, PredictionResponse
+>>>>>>> 484db9627391bacbc72e692f3bef176f281f48cf
 
 # Global dictionary to hold the loaded model
 ml_models: Dict[str, Any] = {}
 
+<<<<<<< HEAD
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """
@@ -17,6 +81,27 @@ async def lifespan(app: FastAPI):
     Loads the ML model into memory before the API starts receiving traffic.
     """
     try:
+=======
+# Load compiled workspace artifacts safely during initiation runtime
+try:
+    with open("models/pipeline.pkl", "rb") as f:
+        pipeline = pickle.load(f)
+    with open("models/champion_model.pkl", "rb") as f:
+        model = pickle.load(f)
+except FileNotFoundError:
+    # Fallback placeholders for deployment verification isolation runtimes
+    pipeline, model = None, None
+
+@app.get("/health")
+def health_check():
+  
+    return {"status": "healthy", "model_loaded": model is not None}
+
+@app.post("/predict", response_model=list[PredictionResponse])
+def predict_risk(payload: PredictionRequest):
+    if not model or not pipeline:
+        raise HTTPException(status_code=503, detail="Inference models not initialized.")
+>>>>>>> 484db9627391bacbc72e692f3bef176f281f48cf
         
         # Force it to use a direct, local path instead of a models:/ registry URI
         # model_uri = r"D:\personal\kifiya 10 Academy\10 Academy\Week 4 credit-risk-model\mlruns\0\YOUR_ACTUAL_RUN_ID_HERE\artifacts\model"
@@ -108,6 +193,7 @@ async def predict_risk(payload: CreditFeatureInput):
         )
         
     except Exception as e:
+<<<<<<< HEAD
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Prediction failed: {str(e)}"
@@ -120,3 +206,16 @@ def read_root():
         "status": "Healthy",
         "docs_url": "http://127.0.0.1:8000/docs"
     }
+=======
+
+        raise HTTPException(status_code=500, detail=f"Inference failed: {str(e)}")
+    
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run("src.api.main:app", host="127.0.0.1", port=8000, reload=True)
+    
+    
+    import pydantic_models
+    from data_processing import create_full_processing_pipeline, ManualWoETransformer, TransactionAggregator
+        raise HTTPException(status_code=400, detail=f"Pipeline Processing Error: {str(e)}")
+>>>>>>> 484db9627391bacbc72e692f3bef176f281f48cf
