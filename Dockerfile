@@ -1,22 +1,17 @@
-FROM python:3.11-slim
+FROM python:3.10-slim
 
 WORKDIR /app
 
-# Install system dependencies if required
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential \
-    && rm -rf /var/lib/apt/lists/*
-
-# Copy requirements and install dependencies
+# Install dependencies
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy application source code and tests
-COPY src/ ./src/
-COPY tests/ ./tests/
+# Copy the application code
+COPY api/ ./api/
 
-# Expose the application port
+# Expose FastAPI's default port
 EXPOSE 8000
 
-# Point Uvicorn to main inside the src folder (src.main:app)
-CMD ["uvicorn", "src.main:app", "--host", "0.0.0.0", "--port", "8000"]
+# FIX: Point to the actual module paths correctly.
+# 'api.main:app' translates to: look in the 'api' directory, open 'main.py', find 'app = FastAPI()'
+CMD ["uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8000"]
